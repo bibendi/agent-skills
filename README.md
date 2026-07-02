@@ -22,7 +22,7 @@ Skills that help agents work with code, libraries, and frameworks.
 
 | Name | Description |
 |------|-------------|
-| [Library Skill Writer](./skills/lib-skills-writer) | Teaches the agent how to architect and write multi-file Agent Skills for large libraries (gems, packages, frameworks), and how to keep them up to date. |
+| [lib-skills-writer](./skills/lib-skills-writer) | Teaches the agent how to architect and write multi-file Agent Skills for large libraries (gems, packages, frameworks), and how to keep them up to date. |
 
 ### Team Communication
 
@@ -30,7 +30,7 @@ Skills that help agents summarize and share outcomes from engineering meetings.
 
 | Name | Description |
 |------|-------------|
-| [Follow-up](./skills/follow-up) | Creates follow-up emails from technical meetings: summaries, action items, decisions, and risks. |
+| [follow-up](./skills/follow-up) | Creates follow-up emails from technical meetings: summaries, action items, decisions, and risks. |
 
 ---
 
