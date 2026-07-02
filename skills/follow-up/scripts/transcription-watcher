@@ -1,0 +1,332 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# =============================================================================
+# transcription-watcher
+# Self-contained script that auto-runs opencode run on new .md files placed
+# in Vault/Meetings/Transcriptions. The Vault root is auto-detected from the
+# script's own location (.agents/skills/follow-up/scripts/).
+#
+# Usage:
+#   ./transcription-watcher setup      -- install and start the launchd service
+#   ./transcription-watcher uninstall  -- remove the launchd service
+#   ./transcription-watcher start      -- start the service via launchd
+#   ./transcription-watcher stop       -- stop the service
+#   ./transcription-watcher restart    -- restart the service
+#   ./transcription-watcher status     -- show status and recent logs
+#   ./transcription-watcher logs       -- show all recent log output
+#   ./transcription-watcher run        -- run watcher in foreground (debug)
+#
+# Internal (called by launchd / fswatch / xargs):
+#   ./transcription-watcher daemon           -- start the fswatch loop
+#   ./transcription-watcher process <file>   -- process a single file
+# =============================================================================
+
+# --- Resolve paths relative to this script -----------------------------------
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
+  SCRIPT_PATH=$(readlink "$SCRIPT_PATH")
+  [[ "$SCRIPT_PATH" == /* ]] || SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
+SCRIPT_PATH="$SCRIPT_DIR/$(basename "$SCRIPT_PATH")"
+
+# Vault root: script lives in .agents/skills/follow-up/scripts/
+VAULT_DIR="${VAULT_DIR:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
+WATCH_DIR="$VAULT_DIR/Meetings/Transcriptions"
+LOG_DIR="$SCRIPT_DIR/../logs"
+
+PLIST_LABEL="com.user.transcription-watcher"
+PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
+
+MODEL="${OPENCODE_MODEL:-opencode-go/deepseek-v4-flash}"
+
+# --- Utilities ---------------------------------------------------------------
+info()  { echo "[INFO]  $*"; }
+warn()  { echo "[WARN]  $*" >&2; }
+error() { echo "[ERROR] $*" >&2; }
+die()   { error "$*"; exit 1; }
+
+detect_command() {
+  local cmd="$1"
+  if command -v "$cmd" &>/dev/null; then
+    command -v "$cmd"
+    return 0
+  fi
+  for p in /opt/homebrew/bin /usr/local/bin /usr/bin /bin; do
+    if [[ -x "$p/$cmd" ]]; then
+      echo "$p/$cmd"
+      return 0
+    fi
+  done
+  return 1
+}
+
+require_command() {
+  local cmd="$1"
+  local path
+  path=$(detect_command "$cmd") || die "Command '$cmd' not found. Please install it and ensure it is in your PATH."
+  echo "$path"
+}
+
+# --- Internal: process a single file -----------------------------------------
+cmd_process() {
+  local file="${1:-}"
+  [[ -z "$file" ]] && die "Usage: $0 process <file>"
+
+  local basename_safe
+  basename_safe=$(basename "$file" .md)
+  local logfile="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_${basename_safe}.log"
+
+  mkdir -p "$LOG_DIR"
+
+  local rel_file prompt
+  rel_file="${file#$VAULT_DIR/}"
+  prompt="Use 'follow-up' skill and process file '$rel_file'"
+
+  {
+    echo "=== $(date '+%Y-%m-%d %H:%M:%S'): $file ==="
+    echo "Prompt: $prompt"
+
+    if [[ ! -f "$file" ]]; then
+      echo "SKIP: file does not exist: $file"
+      return 0
+    fi
+
+    if [[ "$file" != *.md ]]; then
+      echo "SKIP: not a .md file: $file"
+      return 0
+    fi
+
+    local session_id
+    session_id=$(opencode run \
+      --dir "$VAULT_DIR" \
+      --model "$MODEL" \
+      --format json \
+      "$prompt" \
+      | jq -r '.sessionID // empty' \
+      | head -n 1)
+
+    if [[ -n "$session_id" ]]; then
+      echo "Session: $session_id"
+      opencode session delete "$session_id" >/dev/null 2>&1 || true
+      echo "Deleted: $session_id"
+    else
+      echo "No session ID (opencode may have returned an error or non-JSON output)"
+    fi
+
+    echo "=== done ==="
+  } >> "$logfile" 2>&1
+}
+
+# --- Internal: daemon mode (called by launchd) -------------------------------
+cmd_daemon() {
+  local fswatch_path
+  fswatch_path=$(require_command fswatch)
+
+  mkdir -p "$WATCH_DIR"
+
+  # fswatch emits paths on events; xargs invokes this same script with 'process'
+  exec "$fswatch_path" -0 -E --exclude '.*' -i '\.md$' "$WATCH_DIR" \
+    | xargs -0 -n 1 "$SCRIPT_PATH" process
+}
+
+# --- User-facing commands ----------------------------------------------------
+
+cmd_setup() {
+  info "Setting up transcription-watcher..."
+
+  local fswatch_path opencode_path jq_path
+  fswatch_path=$(require_command fswatch)
+  opencode_path=$(require_command opencode)
+  jq_path=$(require_command jq)
+
+  info "Found: fswatch=$fswatch_path, opencode=$opencode_path, jq=$jq_path"
+
+  mkdir -p "$WATCH_DIR" "$LOG_DIR"
+
+  info "Creating LaunchAgent: $PLIST_PATH"
+  cat > "$PLIST_PATH" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$PLIST_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$SCRIPT_PATH</string>
+    <string>daemon</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$VAULT_DIR</string>
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/transcription-watcher.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/transcription-watcher.err</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>OPENCODE_MODEL</key>
+    <string>$MODEL</string>
+  </dict>
+</dict>
+</plist>
+PLIST_EOF
+
+  chmod 644 "$PLIST_PATH"
+
+  info "Registering with launchd..."
+  if launchctl list "$PLIST_LABEL" &>/dev/null; then
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+  fi
+  launchctl load "$PLIST_PATH"
+
+  info "Done! Service '$PLIST_LABEL' registered and started."
+  info ""
+  info "Useful commands:"
+  info "  $SCRIPT_PATH status  -- show status"
+  info "  $SCRIPT_PATH logs    -- show logs"
+  info "  $SCRIPT_PATH run     -- run in foreground (for debugging)"
+}
+
+cmd_uninstall() {
+  info "Removing transcription-watcher..."
+
+  if [[ -f "$PLIST_PATH" ]]; then
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    rm -f "$PLIST_PATH"
+    info "LaunchAgent removed."
+  fi
+
+  info "Done. Logs remain in $LOG_DIR (remove manually if desired)."
+}
+
+cmd_start() {
+  if [[ ! -f "$PLIST_PATH" ]]; then
+    die "LaunchAgent not found. Run '$SCRIPT_PATH setup' first."
+  fi
+  launchctl load "$PLIST_PATH" 2>/dev/null || launchctl start "$PLIST_LABEL"
+  info "Service started."
+}
+
+cmd_stop() {
+  if [[ -f "$PLIST_PATH" ]]; then
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+  fi
+  info "Service stopped."
+}
+
+cmd_restart() {
+  cmd_stop
+  sleep 1
+  cmd_start
+}
+
+cmd_status() {
+  if launchctl list "$PLIST_LABEL" &>/dev/null; then
+    info "Status: running"
+    local pid
+    pid=$(launchctl list "$PLIST_LABEL" 2>/dev/null | awk '/PID/ {print $2}')
+    [[ -n "$pid" ]] && info "PID: $pid"
+  else
+    warn "Status: not running"
+  fi
+
+  info ""
+  info "launchd logs:"
+  info "  stdout: /tmp/transcription-watcher.out"
+  info "  stderr: /tmp/transcription-watcher.err"
+  info ""
+  info "Last 5 processed files:"
+  if [[ -d "$LOG_DIR" ]]; then
+    ls -1t "$LOG_DIR" 2>/dev/null | head -n 5 | sed 's/^/  /'
+  else
+    echo "  (no logs found)"
+  fi
+}
+
+cmd_logs() {
+  info "--- stderr (launchd) ---"
+  tail -n 20 /tmp/transcription-watcher.err 2>/dev/null || echo "(empty)"
+  info ""
+  info "--- stdout (launchd) ---"
+  tail -n 20 /tmp/transcription-watcher.out 2>/dev/null || echo "(empty)"
+  info ""
+  info "--- last processing log ---"
+  if [[ -d "$LOG_DIR" ]]; then
+    local last_log
+    last_log=$(ls -1t "$LOG_DIR" 2>/dev/null | head -n 1)
+    if [[ -n "$last_log" ]]; then
+      echo "  $LOG_DIR/$last_log"
+      echo "  ---"
+      tail -n 20 "$LOG_DIR/$last_log" | sed 's/^/  /'
+    else
+      echo "  (no logs found)"
+    fi
+  fi
+}
+
+cmd_run() {
+  info "Running watcher in foreground (debug mode)..."
+  info "Press Ctrl+C to stop"
+  cmd_daemon
+}
+
+cmd_help() {
+  cat << EOF
+Usage: $(basename "$0") <command>
+
+Commands:
+  setup      Install and start the watcher (creates launchd agent)
+  uninstall  Remove the watcher and launchd agent
+  start      Start the service via launchd
+  stop       Stop the service
+  restart    Restart the service
+  status     Show status and recent logs
+  logs       Show recent output from all logs
+  run        Run the watcher now (foreground, for debugging)
+  help       Show this help message
+
+Environment variables:
+  VAULT_DIR          Path to the vault (default: resolved from script location)
+  OPENCODE_MODEL     opencode model (default: opencode-go/deepseek-v4-flash)
+EOF
+}
+
+# --- main --------------------------------------------------------------------
+main() {
+  local cmd="${1:-help}"
+  case "$cmd" in
+    process)
+      shift
+      cmd_process "$@"
+      ;;
+    daemon)
+      cmd_daemon
+      ;;
+    setup)      cmd_setup ;;
+    uninstall)  cmd_uninstall ;;
+    start)      cmd_start ;;
+    stop)       cmd_stop ;;
+    restart)    cmd_restart ;;
+    status)     cmd_status ;;
+    logs)       cmd_logs ;;
+    run)        cmd_run ;;
+    help|--help|-h) cmd_help ;;
+    *)
+      error "Unknown command: $cmd"
+      cmd_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

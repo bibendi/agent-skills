@@ -1,0 +1,39 @@
+filters:
+  and:
+    - file.inFolder("Meetings/Follow-Ups")
+properties:
+  file.name:
+    displayName: Note
+  meeting_date:
+    displayName: Дата
+  meeting_type:
+    displayName: Тип встречи
+  summary:
+    displayName: Summary
+views:
+  - type: table
+    name: All Meetings
+    order:
+      - file.name
+      - meeting_date
+      - meeting_type
+      - summary
+    sort:
+      - property: file.name
+        direction: DESC
+    indentProperties: false
+  - type: table
+    name: Regular Meetings
+    filters:
+      and:
+        - "!meeting_type.isEmpty()"
+    groupBy:
+      property: meeting_type
+      direction: ASC
+    order:
+      - file.name
+      - meeting_date
+      - summary
+    sort:
+      - property: file.basename
+        direction: DESC
