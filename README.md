@@ -22,7 +22,7 @@ Skills that help agents work with code, libraries, and frameworks.
 
 | Name | Description |
 |------|-------------|
-| [lib-skills-writer](./skills/lib-skills-writer) | Teaches the agent how to architect and write multi-file Agent Skills for large libraries (gems, packages, frameworks), and how to keep them up to date. |
+| [lib-skill-writer](./skills/lib-skill-writer) | Teaches the agent how to architect and write multi-file Agent Skills for large libraries (gems, packages, frameworks), and how to keep them up to date. |
 
 ### Team Communication
 
