@@ -10,10 +10,10 @@ Use this skill when generating or maintaining AI agent documentation for large, 
 This skill is used both for the first-time generation of a skill and for incremental updates when the library changes.
 
 ## Target Directory Architecture
-Every generated skill must follow this file tree:
+Every generated skill must follow this file tree and be created inside the current project:
 
 ```text
-{skill-name}/
+./skills/{skill-name}/
 ├── SKILL.md
 └── references/
     ├── architecture.md
@@ -25,6 +25,8 @@ Every generated skill must follow this file tree:
     │   └── ...
     └── troubleshooting.md
 ```
+
+Always place the generated skill at `./skills/{skill-name}/` relative to the project root. Do not write skill files to temporary directories, system paths, or locations outside the current project.
 
 ## 1. Root File (SKILL.md)
 
@@ -215,15 +217,16 @@ See also:
 
 ## 4. Generation Workflow
 
-1. Analyze the library: identify the runtime model, lifecycle, configuration surface, and real-world tasks the library solves.
-2. Discover use cases: look at docs, examples, issue trackers, FAQs, and common integration patterns.
-3. Cluster by user goal, not by module or technical layer. Name each use case as `verb-noun`.
-4. Write `architecture.md` first.
-5. Write `initialization.md` and `migration.md` next — they are required.
-6. Write remaining recipe files — one per use case.
-7. Write `troubleshooting.md` from known errors and failure modes.
-8. Write `SKILL.md` last as a router.
-9. Verify against the quality gates below.
+1. Create the target directory `./skills/{skill-name}/` inside the current project. All generated files must live under this path.
+2. Analyze the library: identify the runtime model, lifecycle, configuration surface, and real-world tasks the library solves.
+3. Discover use cases: look at docs, examples, issue trackers, FAQs, and common integration patterns.
+4. Cluster by user goal, not by module or technical layer. Name each use case as `verb-noun`.
+5. Write `architecture.md` first.
+6. Write `initialization.md` and `migration.md` next — they are required.
+7. Write remaining recipe files — one per use case.
+8. Write `troubleshooting.md` from known errors and failure modes.
+9. Write `SKILL.md` last as a router.
+10. Verify against the quality gates below.
 
 ## 5. Update Workflow
 
@@ -261,6 +264,7 @@ Run the quality gates. Ensure no unrelated files were changed.
 ## 6. Quality Gates
 
 Before finishing, confirm:
+- [ ] The skill is located at `./skills/{skill-name}/` inside the current project.
 - [ ] SKILL.md has no implementation details.
 - [ ] `initialization.md` and `migration.md` exist at the `references/` level.
 - [ ] No class or method signatures are duplicated from the codebase.
